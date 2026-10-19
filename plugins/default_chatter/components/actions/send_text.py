@@ -15,6 +15,7 @@ from uuid import uuid4
 from src.app.plugin_system.api.adapter_api import get_bot_info_by_platform
 from src.app.plugin_system.api.log_api import get_logger
 from src.app.plugin_system.api.send_api import send_message
+from src.app.plugin_system.api.text_policy import strip_emoji, strip_stage_parens, strip_tool_markup
 from src.app.plugin_system.base import BaseAction
 from src.app.plugin_system.types import Message, MessageType
 
@@ -22,6 +23,8 @@ from ..config import DefaultChatterConfig
 from ...utils.probability_gate import set_next_tick_sub_agent_bonus
 
 logger = get_logger("default_chatter")
+
+_ANGLE_AT_RE = re.compile(r"@<[^<>]+?:\s*\d+\s*>")
 
 _TYPING_DELAY_PER_CHAR = 0.5
 _TYPING_DELAY_MAX_SECONDS = 10.0
@@ -112,13 +115,32 @@ class SendTextAction(BaseAction):
                 flags=re.IGNORECASE,
             )[0].strip()
 
-        # 将正文开头的 @ 名称转换为 at 参数提示。
+        # 将正文开头的 @（支持 @名字 与 @<名字:QQ>）转换为 at 参数，正文不残留 QQ 号。
         at_prefix_hint: str | None = None
         if content:
-            at_match = re.match(r"^\s*@([^\s]+)\s*", content)
-            if at_match:
-                at_prefix_hint = at_match.group(1).strip()
-                content = content[at_match.end():].lstrip()
+            stripped = content.lstrip()
+            tag_match = re.match(r"@<\s*([^<>:>]+?)\s*:\s*(\d+)\s*>", stripped)
+            if tag_match:
+                at_prefix_hint = tag_match.group(2)
+                content = stripped[tag_match.end():]
+            else:
+                plain_match = re.match(r"@([^\s@<>]+)", stripped)
+                if plain_match:
+                    at_prefix_hint = plain_match.group(1).strip()
+                    content = stripped[plain_match.end():]
+        if content:
+            # 正文里若还残留 @<名字:QQ> 形式的标签，一律移除，避免把 QQ 号展示出来
+            content = _ANGLE_AT_RE.sub("", content)
+            content = re.sub(r"[ \t]+", " ", content).strip()
+
+        # 硬性约束：正文不允许内联 emoji，也不允许把工具调用标记当正文发出
+        if content:
+            cleaned = strip_tool_markup(content)
+            cleaned = strip_stage_parens(cleaned)
+            cleaned = strip_emoji(cleaned)
+            if cleaned != content:
+                content = cleaned
+                logger.debug("send_text: 已剥离正文中的 emoji/工具标记")
 
         if not (content or at_prefix_hint):
             yield True, "内容为空，跳过发送"
