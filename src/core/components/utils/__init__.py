@@ -5,7 +5,10 @@
 
 from src.core.components.utils.deps_installer import DependencyInstaller, PluginDepSpec
 from src.core.components.utils.associated_types import validate_associated_types
-from src.core.components.utils.invoke_utils import should_strip_auto_reason_argument
+from src.core.components.utils.invoke_utils import (
+    filter_unsupported_kwargs,
+    should_strip_auto_reason_argument,
+)
 from src.core.components.utils.schema_utils import (
     extract_description_from_docstring,
     map_type_to_json,
@@ -18,6 +21,7 @@ __all__ = [
     "extract_description_from_docstring",
     "validate_associated_types",
     "should_strip_auto_reason_argument",
+    "filter_unsupported_kwargs",
     "DependencyInstaller",
     "PluginDepSpec",
 ]

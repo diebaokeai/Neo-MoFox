@@ -43,3 +43,49 @@ def should_strip_auto_reason_argument(
             return False
 
     return "reason" not in sig.parameters
+
+
+def filter_unsupported_kwargs(
+    execute_func: Callable[..., Any],
+    kwargs: dict[str, Any],
+) -> list[str]:
+    """丢弃 execute 签名不接受的参数（例如模型幻觉出的多余字段）。
+
+    规则：
+    1. execute 含 **kwargs 时全部保留（返回空列表）。
+    2. 无法分析签名时全部保留，避免误删导致缺参报错。
+    3. 其余情况原地删除签名里没有的键，返回被丢弃的参数名列表。
+
+    与 should_strip_auto_reason_argument 的区别：后者只处理框架自动注入的
+    reason；本函数处理 LLM 在 tool call 里多给的任意字段，避免
+    TypeError: execute() got an unexpected keyword argument 直接打断调用。
+
+    Args:
+        execute_func: 目标组件的 execute 可调用对象。
+        kwargs: 即将传递给 execute 的参数字典（会被原地修改）。
+
+    Returns:
+        list[str]: 被丢弃的参数名（保持原顺序）。
+    """
+    if not kwargs:
+        return []
+
+    try:
+        sig = inspect.signature(execute_func)
+    except (TypeError, ValueError):
+        return []
+
+    for param in sig.parameters.values():
+        if param.kind == inspect.Parameter.VAR_KEYWORD:
+            return []
+
+    accepted = {
+        name
+        for name, param in sig.parameters.items()
+        if param.kind
+        in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+    }
+    dropped = [key for key in kwargs if key not in accepted]
+    for key in dropped:
+        kwargs.pop(key, None)
+    return dropped

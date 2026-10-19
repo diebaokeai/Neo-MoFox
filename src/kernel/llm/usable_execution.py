@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
-from src.core.components.utils import should_strip_auto_reason_argument
+from src.core.components.utils import filter_unsupported_kwargs, should_strip_auto_reason_argument
 from src.kernel.llm import LLMUsable, LLMUsableExecution, LLMPayload, ROLE, ToolRegistry, ToolResult
 from src.kernel.logger import get_logger
 
@@ -167,6 +168,15 @@ async def create_llm_usable_execution(
     if should_strip_auto_reason_argument(instance.execute, call_kwargs):
         call_kwargs.pop("reason", None)
 
+    # 模型多给的字段（如 say 的 reaction）会让 execute 直接 TypeError；
+    # 这里统一过滤掉签名不接受的参数，保证调用不被打断。
+    dropped_kwargs = filter_unsupported_kwargs(instance.execute, call_kwargs)
+    if dropped_kwargs:
+        get_logger("llm_tool_call").warning(
+            f"忽略 execute 不支持的参数（模型多余输出）: component={usable_cls.__name__}, "
+            f"dropped={dropped_kwargs}"
+        )
+
     execution = instance._wrap_execute(**call_kwargs)
     if task_observer is not None:
         execution.add_task_observer(task_observer)
@@ -280,6 +290,28 @@ async def run_llm_usable_executions(
             await execution.wait_done()
 
 
+def _describe_failure(name: str, exc: Exception) -> str:
+    """把工具调用准备/绑定失败转成对模型可执行的反馈文本。
+
+    对“缺少必填参数”的 TypeError 给出明确指令（正文类工具强调
+    必须把内容放进 content 参数），帮助模型在下一轮自愈重调；
+    其它异常保持简短描述。
+    """
+    message = str(exc)
+    missing: list[str] = []
+    match = re.search(r"missing \d+ required positional arguments?:\s*(.+)", message)
+    if match:
+        missing = re.findall(r"'([^']+)'", match.group(1))
+    if missing:
+        names = "、".join(dict.fromkeys(missing))
+        hint = (
+            "；若为发送文本类工具（如 send_text），要发送的正文必须写入 content 参数，"
+            "不要只写在回复正文/草稿里"
+        )
+        return f"调用 {name} 失败：缺少必要参数【{names}】。请补全参数后重新调用{hint}。"
+    return f"执行异常: {message}"
+
+
 async def execute_tool_calls(
     *,
     calls: Sequence["ToolCall"],
@@ -346,8 +378,8 @@ async def execute_tool_calls(
                     task_observer=task_observer,
                 )
             except Exception as exc:
-                prepared_call.result_text = f"执行异常: {exc}"
-                logger.error(f"准备执行 {call.name} 异常: {exc}", exc_info=True)
+                prepared_call.result_text = _describe_failure(call.name, exc)
+                logger.warning(f"准备执行 {call.name} 异常: {exc}")
 
         prepared.append(prepared_call)
 
