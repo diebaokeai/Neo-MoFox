@@ -1,0 +1,70 @@
+{
+    "name": "bilibili_queue",
+    "display_name": "直播弹幕排队（排队姬接入）",
+    "version": "2.1.0",
+    "description": "把 B 站直播弹幕接到独立排队姬应用（live_queue）上：观众发「排队」即入队，舰长可弹幕叫号；队列状态与 OBS 叠加页由 live_queue 自己提供",
+    "author": "MoFox Community",
+    "dependencies": {
+        "plugins": [],
+        "components": []
+    },
+    "include": [
+        {
+            "component_type": "service",
+            "component_name": "queue",
+            "dependencies": [],
+            "enabled": true
+        },
+        {
+            "component_type": "event_handler",
+            "component_name": "danmaku_queue",
+            "dependencies": [
+                "bilibili_queue:service:queue"
+            ],
+            "enabled": true
+        },
+        {
+            "component_type": "command",
+            "component_name": "排队",
+            "dependencies": [
+                "bilibili_queue:service:queue"
+            ],
+            "enabled": true
+        },
+        {
+            "component_type": "command",
+            "component_name": "排队管理",
+            "dependencies": [
+                "bilibili_queue:service:queue"
+            ],
+            "enabled": true
+        },
+        {
+            "component_type": "config",
+            "component_name": "config",
+            "dependencies": [],
+            "enabled": true
+        }
+    ],
+    "entry_point": "plugin.py",
+    "api_version": {
+        "log_api": "1.0.0",
+        "send_api": "1.0.0"
+    },
+    "python_dependencies": [
+        "PySide6-Essentials>=6.6.0"
+    ],
+    "dependencies_required": false,
+    "categories": [
+        "chat",
+        "tool"
+    ],
+    "tags": [
+        "bilibili",
+        "live",
+        "danmaku",
+        "queue",
+        "overlay",
+        "obs"
+    ]
+}

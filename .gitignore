@@ -110,6 +110,8 @@ skills-lock.json
 !plugins/utility_commands/
 !plugins/skill_manager/
 !plugins/neo_default_chatter/
+!plugins/bilibili_queue/
+!plugins/cyrene_neochatter/
 
 # live_queue 独立应用的运行时产物（本机配置与队列数据，不入库）
 live_queue/config.json
