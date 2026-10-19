@@ -45,6 +45,7 @@ class DefaultChatterSessionState:
     cross_round_seen_signatures: set[str]
     unread_msgs_to_flush: list[Message]
     plain_text_retry_count: int = 0
+    _empty_text_send_retried: bool = False  # 空 content 文本动作是否已在本轮自动补发过
     used_tools_in_round: set[str] = field(default_factory=set)
     tool_results_in_round: list[dict[str, object]] = field(default_factory=list)
     decision_history: list[SubAgentDecision] = field(default_factory=list)
@@ -757,6 +758,20 @@ class DefaultChatterSession:
                     reason = args.pop("reason", "未提供原因")
                     self.logger.info(f"LLM 调用了 {call.name}; 原因={reason}; 参数={args}")
 
+                # —— 文本动作漏 content 检测（MiniMax-M3 思考型模型偶发：只给工具名不给参数）——
+                empty_text_call = any(
+                    call.name in ("action-send_text", "action_send_text")
+                    and not str(
+                        (dict(call.args) if isinstance(call.args, dict) else {}).get("content") or ""
+                    ).strip()
+                    for call in current_calls
+                )
+                was_empty_text_retried = bool(
+                    getattr(state, "_empty_text_send_retried", False)
+                )
+                if not empty_text_call:
+                    state._empty_text_send_retried = False
+
                 call_outcome = await process_tool_calls(
                     stream_id=chat_stream.stream_id,
                     calls=current_calls,
@@ -790,6 +805,27 @@ class DefaultChatterSession:
                         to_phase=DefaultChatterSessionPhase.FOLLOW_UP,
                         session=self,
                         reason="待处理的工具结果",
+                    )
+                    continue
+
+                if empty_text_call and not was_empty_text_retried:
+                    # 自动补一轮：提醒模型把要发的正文填进 content 后重发，避免静默丢消息
+                    state._empty_text_send_retried = True
+                    llm_response.add_payload(
+                        LLMPayload(
+                            ROLE.USER,
+                            Text(
+                                "（系统提醒）你刚才调用 action-send_text 时没有提供 content 参数，"
+                                "消息没有发出。请重新调用 action-send_text，把你真正想对用户说的话"
+                                "完整放入 content 参数再发送；不要把话只写在思考里。"
+                            ),
+                        )
+                    )
+                    _transition(
+                        state=state,
+                        to_phase=DefaultChatterSessionPhase.MODEL_TURN,
+                        session=self,
+                        reason="空content文本动作自动补发",
                     )
                     continue
 
