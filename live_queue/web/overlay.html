@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>排队列表 · OBS 叠加页</title>
+<style>
+  /* 背景保持全透明：OBS 浏览器源默认无背景，直播画面才能透出来 */
+  html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    background: transparent;
+    overflow: hidden;
+    font-family: "Microsoft YaHei", "PingFang SC", "Noto Sans SC", system-ui, sans-serif;
+  }
+
+  #stage {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 12px;
+    box-sizing: border-box;
+    max-height: 100%;
+  }
+
+  .panel {
+    background: var(--panel-bg, rgba(14, 16, 26, 0.72));
+    border: 1px solid var(--panel-border, rgba(120, 200, 255, 0.35));
+    border-radius: 14px;
+    padding: 12px 16px;
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+    backdrop-filter: blur(6px);
+    color: var(--text-color, #f2f6ff);
+  }
+
+  .panel-head {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    margin-bottom: 8px;
+  }
+
+  .panel-title {
+    font-size: var(--title-size, 22px);
+    font-weight: 700;
+    color: var(--accent-color, #6fd3ff);
+    text-shadow: 0 0 10px rgba(111, 211, 255, 0.45);
+  }
+
+  .panel-meta {
+    font-size: 13px;
+    opacity: 0.72;
+    margin-left: auto;
+    white-space: nowrap;
+  }
+
+  .badge {
+    font-size: 12px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    border: 1px solid currentColor;
+    opacity: 0.85;
+  }
+
+  .badge.paused { color: #ffb347; }
+  .badge.full { color: #ff7a7a; }
+
+  .current-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 7px 10px;
+    margin-bottom: 8px;
+    border-radius: 10px;
+    background: var(--current-bg, rgba(111, 211, 255, 0.16));
+    border-left: 4px solid var(--accent-color, #6fd3ff);
+  }
+
+  .current-label {
+    font-size: 13px;
+    letter-spacing: 1px;
+    color: var(--accent-color, #6fd3ff);
+    flex: none;
+  }
+
+  .current-name {
+    font-size: var(--name-size, 20px);
+    font-weight: 700;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .current-ticket {
+    margin-left: auto;
+    font-size: 13px;
+    opacity: 0.7;
+    flex: none;
+  }
+
+  ol.entries {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+  }
+
+  ol.entries li {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: var(--name-size, 20px);
+    line-height: 1.35;
+    min-width: 0;
+  }
+
+  .rank {
+    flex: none;
+    width: 1.9em;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    font-weight: 700;
+    color: var(--accent-color, #6fd3ff);
+    opacity: 0.9;
+  }
+
+  .name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .waited {
+    margin-left: auto;
+    flex: none;
+    font-size: 13px;
+    opacity: 0.6;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .empty {
+    font-size: 15px;
+    opacity: 0.55;
+    padding: 4px 2px;
+  }
+
+  .ghost {
+    display: none;
+  }
+
+  #status {
+    position: fixed;
+    right: 10px;
+    bottom: 8px;
+    font-size: 12px;
+    color: #ff8080;
+    text-shadow: 0 0 6px #000;
+    opacity: 0;
+    transition: opacity 0.3s ease;
+  }
+
+  #status.show { opacity: 1; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div class="empty" id="boot">排队列表加载中…</div>
+</div>
+<div id="status">连接异常，正在重试…</div>
+
+<script>
+(() => {
+  "use strict";
+
+  // 相对路径：无论 Router 被挂在哪个 custom_route_path 下都能正确请求
+  const STATE_URL = "./api/state";
+  const CONFIG_URL = "./api/config";
+
+  const stage = document.getElementById("stage");
+  const statusEl = document.getElementById("status");
+
+  /** 叠加页展示配置，/api/config 返回后覆盖默认值。 */
+  let view = {
+    title: "",
+    show_title: false,
+    max_rows: 8,
+    poll_interval_ms: 1000,
+    show_current: true,
+    show_wait_time: true,
+    accent_color: "#6fd3ff",
+    text_color: "#f2f6ff",
+    panel_bg: "rgba(14, 16, 26, 0.72)",
+    panel_border: "rgba(120, 200, 255, 0.35)",
+    current_bg: "rgba(111, 211, 255, 0.16)",
+    title_size: 22,
+    name_size: 20,
+    queues: [],
+  };
+
+  let revision = -1;
+  let timer = null;
+
+  /** 把秒数格式化成紧凑的中文时长，用于叠加页右侧小字。 */
+  function humanWait(seconds) {
+    const total = Math.max(0, Math.floor(seconds || 0));
+    if (total < 60) return total + "s";
+    const m = Math.floor(total / 60);
+    if (m < 60) return m + "m" + (total % 60 ? (total % 60) + "s" : "");
+    const h = Math.floor(m / 60);
+    return h + "h" + (m % 60) + "m";
+  }
+
+  /** 应用服务端返回的主题变量。 */
+  function applyTheme() {
+    const root = document.documentElement;
+    root.style.setProperty("--accent-color", view.accent_color);
+    root.style.setProperty("--text-color", view.text_color);
+    root.style.setProperty("--panel-bg", view.panel_bg);
+    root.style.setProperty("--panel-border", view.panel_border);
+    root.style.setProperty("--current-bg", view.current_bg);
+    root.style.setProperty("--title-size", view.title_size + "px");
+    root.style.setProperty("--name-size", view.name_size + "px");
+  }
+
+  /** 创建面板外壳，返回可复用的节点引用。 */
+  function createPanel() {
+    const panel = document.createElement("div");
+    panel.className = "panel";
+
+    const head = document.createElement("div");
+    head.className = "panel-head";
+
+    const title = document.createElement("div");
+    title.className = "panel-title";
+
+    const badge = document.createElement("span");
+    badge.className = "badge";
+
+    const meta = document.createElement("div");
+    meta.className = "panel-meta";
+
+    head.append(title, badge, meta);
+
+    const current = document.createElement("div");
+    current.className = "current-row";
+    const currentLabel = document.createElement("div");
+    currentLabel.className = "current-label";
+    currentLabel.textContent = "当前";
+    const currentName = document.createElement("div");
+    currentName.className = "current-name";
+    const currentTicket = document.createElement("div");
+    currentTicket.className = "current-ticket";
+    current.append(currentLabel, currentName, currentTicket);
+
+    const list = document.createElement("ol");
+    list.className = "entries";
+
+    panel.append(head, current, list);
+    return { panel, title, badge, meta, current, currentName, currentTicket, list };
+  }
+
+  /** 用一个队列的快照刷新面板节点（就地更新，避免整体重建导致闪烁）。 */
+  function renderQueue(refs, queue) {
+    const { panel, title, badge, meta, current, currentName, currentTicket, list } = refs;
+
+    title.textContent = queue.title;
+    panel.style.display = "";
+
+    const waiting = queue.waiting || 0;
+    const parts = [waiting + " 人排队"];
+    if (queue.capacity > 0) parts.push("上限 " + queue.capacity);
+    if (queue.served_count > 0) parts.push("已叫号 " + queue.served_count);
+    meta.textContent = parts.join(" · ");
+
+    if (queue.paused) {
+      badge.textContent = "已暂停";
+      badge.className = "badge paused";
+      badge.style.display = "";
+    } else if (queue.capacity > 0 && waiting >= queue.capacity) {
+      badge.textContent = "已满";
+      badge.className = "badge full";
+      badge.style.display = "";
+    } else {
+      badge.textContent = "";
+      badge.style.display = "none";
+    }
+
+    if (view.show_current && queue.current) {
+      current.style.display = "";
+      currentName.textContent = queue.current.nickname;
+      currentTicket.textContent = "序号 " + queue.current.ticket;
+    } else {
+      current.style.display = "none";
+    }
+
+    list.textContent = "";
+    const rows = (queue.entries || []).slice(0, Math.max(0, view.max_rows));
+    rows.forEach((entry, index) => {
+      const li = document.createElement("li");
+
+      const rank = document.createElement("span");
+      rank.className = "rank";
+      rank.textContent = String(index + 1);
+
+      const name = document.createElement("span");
+      name.className = "name";
+      name.textContent = entry.nickname;
+
+      li.append(rank, name);
+
+      if (view.show_wait_time) {
+        const waited = document.createElement("span");
+        waited.className = "waited";
+        waited.textContent = humanWait(entry.waiting_seconds);
+        li.append(waited);
+      }
+      list.append(li);
+    });
+
+    if (waiting > rows.length) {
+      const more = document.createElement("li");
+      const dot = document.createElement("span");
+      dot.className = "rank";
+      dot.textContent = "…";
+      const text = document.createElement("span");
+      text.className = "name";
+      text.textContent = "还有 " + (waiting - rows.length) + " 人未显示";
+      more.append(dot, text);
+      list.append(more);
+    }
+
+    if (!rows.length && !(view.show_current && queue.current)) {
+      const li = document.createElement("li");
+      li.className = "empty";
+      li.textContent = "暂时没人排队，发弹幕即可占位";
+      list.append(li);
+    }
+  }
+
+  /** 用最新快照重建 / 复用面板。 */
+  function render(data) {
+    const queues = (data.queues || []).filter(
+      (q) => !view.queues.length || view.queues.indexOf(q.name) >= 0
+    );
+
+    stage.textContent = "";
+
+    if (view.show_title && view.title) {
+      const head = document.createElement("div");
+      head.className = "panel";
+      head.style.textAlign = "center";
+      head.style.fontSize = view.title_size + 4 + "px";
+      head.style.fontWeight = "700";
+      head.style.color = view.accent_color;
+      head.textContent = view.title;
+      stage.append(head);
+    }
+
+    if (!queues.length) {
+      const empty = document.createElement("div");
+      empty.className = "empty";
+      empty.style.color = view.text_color;
+      empty.textContent = "还没有任何队列";
+      stage.append(empty);
+      return;
+    }
+
+    queues.forEach((queue) => {
+      const refs = createPanel();
+      renderQueue(refs, queue);
+      stage.append(refs.panel);
+    });
+  }
+
+  /** 轮询状态；用 revision 做增量判断，无变化时完全不动 DOM。 */
+  async function tick() {
+    try {
+      const url = STATE_URL + (revision >= 0 ? "?rev=" + revision : "");
+      const resp = await fetch(url, { cache: "no-store" });
+      if (!resp.ok) throw new Error("HTTP " + resp.status);
+      const data = await resp.json();
+      statusEl.classList.remove("show");
+
+      if (revision < 0) revision = data.revision || 0;
+      if (data.changed === false) return;
+
+      revision = data.revision || 0;
+      render(data);
+    } catch (err) {
+      // 瞬时失败（bot 重启 / 页面早于服务就绪）不抛给 OBS，静默等下一轮
+      statusEl.classList.add("show");
+    }
+  }
+
+  /** 读取展示配置，失败时用内置默认值保证叠加页仍可用。 */
+  async function loadConfig() {
+    try {
+      const resp = await fetch(CONFIG_URL, { cache: "no-store" });
+      if (resp.ok) {
+        const data = await resp.json();
+        view = Object.assign(view, data.overlay || {}, { queues: data.queues || [] });
+      }
+    } catch (err) {
+      /* 用默认配置 */
+    }
+    applyTheme();
+  }
+
+  (async () => {
+    document.getElementById("boot").remove();
+    await loadConfig();
+    await tick();
+    timer = setInterval(tick, Math.max(200, view.poll_interval_ms || 1000));
+  })();
+})();
+</script>
+</body>
+</html>

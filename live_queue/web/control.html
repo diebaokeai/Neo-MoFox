@@ -1,0 +1,494 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>排队控制台</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --card: #171a23;
+    --card-2: #1e2230;
+    --line: #2b3040;
+    --text: #e8ecf5;
+    --muted: #9aa4bb;
+    --accent: #6fd3ff;
+    --ok: #4ade80;
+    --warn: #ffb347;
+    --danger: #ff6b6b;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+    font-size: 14px;
+    line-height: 1.6;
+  }
+
+  header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    padding: 14px 20px;
+    border-bottom: 1px solid var(--line);
+    background: var(--card);
+    position: sticky;
+    top: 0;
+    z-index: 10;
+  }
+
+  header h1 { font-size: 17px; margin: 0; }
+  header .spacer { margin-left: auto; }
+
+  main { padding: 18px 20px 60px; display: flex; flex-direction: column; gap: 16px; }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 14px; }
+
+  .card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 14px;
+  }
+
+  .card h2 { font-size: 15px; margin: 0 0 10px; display: flex; align-items: center; gap: 8px; }
+
+  .pill {
+    font-size: 12px;
+    padding: 1px 8px;
+    border-radius: 999px;
+    border: 1px solid currentColor;
+    color: var(--muted);
+  }
+  .pill.paused { color: var(--warn); }
+  .pill.full { color: var(--danger); }
+
+  .muted { color: var(--muted); }
+  .small { font-size: 12.5px; }
+
+  button {
+    font: inherit;
+    font-size: 13px;
+    padding: 4px 11px;
+    border-radius: 8px;
+    border: 1px solid var(--line);
+    background: var(--card-2);
+    color: var(--text);
+    cursor: pointer;
+    transition: border-color .15s, color .15s, background .15s;
+  }
+  button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  button.primary { border-color: var(--accent); color: var(--accent); }
+  button.danger:hover:not(:disabled) { border-color: var(--danger); color: var(--danger); }
+  button.tiny { padding: 1px 7px; font-size: 12px; }
+
+  .row { display: flex; align-items: center; gap: 8px; }
+  .row.wrap { flex-wrap: wrap; }
+  .tools { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+
+  .current {
+    background: rgba(111, 211, 255, .12);
+    border-left: 3px solid var(--accent);
+    border-radius: 8px;
+    padding: 7px 10px;
+    margin-bottom: 8px;
+  }
+
+  ol.entries { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+  ol.entries li {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 3px 6px;
+    border-radius: 6px;
+  }
+  ol.entries li:nth-child(odd) { background: rgba(255, 255, 255, .03); }
+  ol.entries li .rank { width: 1.8em; text-align: right; color: var(--accent); font-variant-numeric: tabular-nums; }
+  ol.entries li .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  ol.entries li .act { margin-left: auto; display: flex; gap: 5px; }
+
+  input, select {
+    font: inherit;
+    font-size: 13px;
+    padding: 4px 9px;
+    border-radius: 8px;
+    border: 1px solid var(--line);
+    background: var(--card-2);
+    color: var(--text);
+    min-width: 0;
+  }
+  input:focus, select:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
+
+  .empty { color: var(--muted); padding: 6px 2px; }
+
+  #toast {
+    position: fixed;
+    right: 18px;
+    bottom: 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    z-index: 50;
+  }
+  #toast div {
+    background: var(--card-2);
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--accent);
+    border-radius: 8px;
+    padding: 8px 13px;
+    max-width: 380px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, .4);
+  }
+  #toast div.err { border-left-color: var(--danger); }
+  #toast div.ok { border-left-color: var(--ok); }
+
+  #hint {
+    display: none;
+    padding: 10px 20px;
+    background: rgba(255, 179, 71, .1);
+    border-bottom: 1px solid var(--line);
+    color: var(--warn);
+    font-size: 13px;
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>🎫 排队控制台</h1>
+  <span class="muted small" id="overlay-link"></span>
+  <span class="spacer"></span>
+  <label class="small muted" for="token">管理密钥</label>
+  <input id="token" type="password" placeholder="未设置则留空（仅本机可写）" style="width: 200px" />
+  <button id="refresh">刷新</button>
+  <label class="small muted"><input type="checkbox" id="auto" checked style="vertical-align: -2px" /> 自动刷新</label>
+</header>
+<div id="hint"></div>
+
+<main>
+  <div class="card">
+    <h2>新建队列</h2>
+    <div class="row wrap">
+      <input id="new-name" placeholder="队名，如 排位" style="width: 150px" />
+      <input id="new-display" placeholder="展示名（可选）" style="width: 150px" />
+      <input id="new-capacity" type="number" min="0" value="0" title="人数上限，0 为不限" style="width: 90px" />
+      <button class="primary" id="create">创建</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>手动加人</h2>
+    <div class="row wrap">
+      <input id="add-queue" placeholder="队名（留空＝默认队，需已存在）" style="width: 160px" />
+      <input id="add-name" placeholder="观众昵称" style="width: 160px" />
+      <button class="primary" id="add">加进队尾</button>
+    </div>
+  </div>
+
+  <div id="queues" class="grid"></div>
+</main>
+
+<div id="toast"></div>
+
+<script>
+(() => {
+  "use strict";
+
+  const API = "./api";
+
+  const $ = (id) => document.getElementById(id);
+  const tokenInput = $("token");
+  const autoBox = $("auto");
+  const queuesEl = $("queues");
+  const hintEl = $("hint");
+
+  let snapshot = { queues: [], updated_at: 0 };
+
+  // ── 工具 ────────────────────────────────────────────
+  /** 弹出右下角提示。 */
+  function toast(message, kind) {
+    const box = document.createElement("div");
+    box.className = kind || "";
+    box.textContent = message;
+    $("toast").append(box);
+    setTimeout(() => box.remove(), 3200);
+  }
+
+  /** 当前填写的管理密钥（存 localStorage，方便下次自动带上）。 */
+  function token() {
+    return (tokenInput.value || "").trim();
+  }
+
+  /** 统一的请求封装：自动带 X-API-Key，并把错误翻译成提示。 */
+  async function call(path, body) {
+    const headers = { "Content-Type": "application/json" };
+    if (token()) headers["X-API-Key"] = token();
+    const resp = await fetch(API + path, {
+      method: body === undefined ? "GET" : "POST",
+      headers,
+      cache: "no-store",
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    let data = null;
+    try { data = await resp.json(); } catch (err) { data = null; }
+    if (!resp.ok) {
+      const detail = (data && (data.detail || data.message)) || ("HTTP " + resp.status);
+      throw new Error(detail);
+    }
+    return data;
+  }
+
+  /** 包装写操作：统一处理异常 + 刷新。 */
+  async function action(path, body, successText) {
+    try {
+      const data = await call(path, body || {});
+      toast(successText || (data && data.message) || "操作成功", "ok");
+      await reload();
+    } catch (err) {
+      toast(err.message, "err");
+    }
+  }
+
+  // ── 渲染 ────────────────────────────────────────────
+  /** 渲染单个队列卡片。 */
+  function renderQueue(queue) {
+    const card = document.createElement("div");
+    card.className = "card";
+
+    // 标题行
+    const head = document.createElement("h2");
+    head.append(document.createTextNode(queue.title));
+    const pill = document.createElement("span");
+    pill.className = "pill";
+    pill.textContent = queue.waiting + " 人";
+    head.append(pill);
+    if (queue.paused) {
+      const p = document.createElement("span");
+      p.className = "pill paused";
+      p.textContent = "已暂停";
+      head.append(p);
+    }
+    if (queue.capacity > 0 && queue.waiting >= queue.capacity) {
+      const f = document.createElement("span");
+      f.className = "pill full";
+      f.textContent = "已满";
+      head.append(f);
+    }
+    const meta = document.createElement("span");
+    meta.className = "muted small";
+    meta.style.marginLeft = "auto";
+    meta.textContent = "序号 " + queue.next_ticket + " · 已叫号 " + queue.served_count;
+    head.append(meta);
+    card.append(head);
+
+    // 当前服务中
+    if (queue.current) {
+      const cur = document.createElement("div");
+      cur.className = "current";
+      const row = document.createElement("div");
+      row.className = "row";
+      const label = document.createElement("span");
+      label.className = "small";
+      label.style.color = "var(--accent)";
+      label.textContent = "当前";
+      const name = document.createElement("strong");
+      name.textContent = queue.current.nickname;
+      const ticket = document.createElement("span");
+      ticket.className = "muted small";
+      ticket.textContent = "#" + queue.current.ticket;
+      row.append(label, name, ticket);
+      row.style.marginBottom = "6px";
+
+      const btns = document.createElement("div");
+      btns.className = "row";
+      const back = document.createElement("button");
+      back.className = "tiny";
+      back.textContent = "放回队首";
+      back.onclick = () => action("/requeue", { queue: queue.name }, "已放回队首");
+      const done = document.createElement("button");
+      done.className = "tiny";
+      done.textContent = "结束";
+      done.onclick = () => action("/finish", { queue: queue.name }, "已结束当前");
+      btns.append(back, done);
+
+      cur.append(row, btns);
+      card.append(cur);
+    }
+
+    // 等待列表
+    const list = document.createElement("ol");
+    list.className = "entries";
+    (queue.entries || []).forEach((entry, index) => {
+      const li = document.createElement("li");
+      const rank = document.createElement("span");
+      rank.className = "rank";
+      rank.textContent = String(index + 1);
+      const name = document.createElement("span");
+      name.className = "name";
+      name.textContent = entry.nickname;
+      const waited = document.createElement("span");
+      waited.className = "muted small";
+      waited.textContent = entry.ticket + " 号";
+      const act = document.createElement("span");
+      act.className = "act";
+      const top = document.createElement("button");
+      top.className = "tiny";
+      top.textContent = "置顶";
+      top.onclick = () => action("/move_front", { queue: queue.name, user_id: entry.user_id }, "已置顶");
+      const del = document.createElement("button");
+      del.className = "tiny danger";
+      del.textContent = "移除";
+      del.onclick = () => action("/remove", { queue: queue.name, user_id: entry.user_id }, "已移除");
+      act.append(top, del);
+      li.append(rank, name, waited, act);
+      list.append(li);
+    });
+    if (!(queue.entries || []).length) {
+      const li = document.createElement("li");
+      li.className = "empty";
+      li.textContent = "队列是空的";
+      list.append(li);
+    }
+    card.append(list);
+
+    // 操作按钮
+    const tools = document.createElement("div");
+    tools.className = "tools";
+
+    const next = document.createElement("button");
+    next.className = "primary";
+    next.textContent = "叫号 ▶";
+    next.disabled = !(queue.entries || []).length;
+    next.onclick = async () => {
+      try {
+        const data = await call("/call_next", { queue: queue.name });
+        toast(
+          data && data.entry
+            ? "叫到：" + data.entry.nickname + "（#" + data.entry.ticket + "）"
+            : "队列为空",
+          "ok"
+        );
+        await reload();
+      } catch (err) {
+        toast(err.message, "err");
+      }
+    };
+
+    const pause = document.createElement("button");
+    pause.textContent = queue.paused ? "恢复排队" : "暂停排队";
+    pause.onclick = () => action("/pause", { queue: queue.name, paused: !queue.paused },
+      queue.paused ? "已恢复排队" : "已暂停排队");
+
+    const cap = document.createElement("button");
+    cap.textContent = "改上限";
+    cap.onclick = async () => {
+      const input = window.prompt("人数上限（0 表示不限）", String(queue.capacity));
+      if (input === null) return;
+      const value = parseInt(input, 10);
+      if (Number.isNaN(value) || value < 0) {
+        toast("上限必须是非负整数", "err");
+        return;
+      }
+      await action("/capacity", { queue: queue.name, capacity: value }, "已更新上限");
+    };
+
+    const clear = document.createElement("button");
+    clear.textContent = "清空";
+    clear.onclick = () => {
+      if (window.confirm("清空「" + queue.title + "」的全部排队？")) {
+        action("/clear", { queue: queue.name }, "已清空");
+      }
+    };
+
+    const del = document.createElement("button");
+    del.className = "danger";
+    del.textContent = "删除队列";
+    del.onclick = () => {
+      if (window.confirm("删除队列「" + queue.title + "」？此操作不可撤销。")) {
+        action("/delete", { queue: queue.name }, "已删除队列");
+      }
+    };
+
+    tools.append(next, pause, cap, clear, del);
+    card.append(tools);
+
+    return card;
+  }
+
+  /** 渲染整个看板。 */
+  function render() {
+    queuesEl.textContent = "";
+    if (!snapshot.queues.length) {
+      const empty = document.createElement("div");
+      empty.className = "card empty";
+      empty.textContent = "还没有任何队列。观众排队必须写明队名，所以请先在上方「新建队列」里建一个（例如「排位」）。";
+      queuesEl.append(empty);
+      return;
+    }
+    snapshot.queues.forEach((queue) => queuesEl.append(renderQueue(queue)));
+  }
+
+  // ── 数据 ────────────────────────────────────────────
+  /** 拉取最新状态并重绘。 */
+  async function reload() {
+    try {
+      snapshot = await call("/state");
+      render();
+      hintEl.style.display = "none";
+    } catch (err) {
+      toast("拉取状态失败：" + err.message, "err");
+    }
+  }
+
+  /** 探测写权限：非本机访问且没配 token 时给出显式提示。 */
+  async function checkWriteAccess() {
+    try {
+      const data = await call("/whoami", {});
+      if (!data.can_write) {
+        hintEl.textContent = "当前访问来源不允许写入队列。请在下方填写「管理密钥」，或在插件配置里设置 admin_token。";
+        hintEl.style.display = "block";
+      }
+    } catch (err) {
+      /* 探测失败不影响只读浏览 */
+    }
+  }
+
+  // ── 事件绑定 ────────────────────────────────────────
+  $("refresh").onclick = reload;
+  $("create").onclick = () => {
+    const name = $("new-name").value.trim();
+    if (!name) { toast("请先填队名", "err"); return; }
+    action("/create", {
+      queue: name,
+      display_name: $("new-display").value.trim(),
+      capacity: parseInt($("new-capacity").value, 10) || 0,
+    }, "队列已创建").then(() => { $("new-name").value = ""; $("new-display").value = ""; });
+  };
+  $("add").onclick = () => {
+    const nickname = $("add-name").value.trim();
+    if (!nickname) { toast("请先填昵称", "err"); return; }
+    action("/add", { queue: $("add-queue").value.trim(), nickname }, "已加入队尾")
+      .then(() => { $("add-name").value = ""; });
+  };
+
+  tokenInput.value = window.localStorage.getItem("bilibili_queue_token") || "";
+  tokenInput.onchange = () => {
+    window.localStorage.setItem("bilibili_queue_token", token());
+    checkWriteAccess();
+  };
+
+  window.addEventListener("load", () => {
+    $("overlay-link").textContent = "叠加页：" + new URL("./overlay", window.location.href).href;
+    reload().then(checkWriteAccess);
+  });
+
+  setInterval(() => { if (autoBox.checked) reload(); }, 2000);
+})();
+</script>
+</body>
+</html>

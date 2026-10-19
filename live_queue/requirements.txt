@@ -1,0 +1,9 @@
+# PySide6-Essentials>=6.6.0
+#
+# live_queue（排队姬）唯一的外部依赖，而且只在需要**桌面窗口**时才用到：
+# 不带窗口的 headless 模式（`python app.py --ui off`）只用 Python 标准库。
+#
+# 安装：
+#     pip install -r live_queue/requirements.txt
+# 只有窗口、不需要时可以不装；用 mofox 插件自动拉起时，插件 manifest 里也声明了这个包。
+PySide6-Essentials>=6.6.0
