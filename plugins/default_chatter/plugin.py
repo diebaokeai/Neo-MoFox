@@ -104,9 +104,16 @@ class DefaultChatter(BaseChatter):
 
     def _build_enhanced_history_text(self, chat_stream: ChatStream) -> str:
         """构建历史消息文本。"""
+        config = getattr(self.plugin, "config", None)
+        limit = (
+            config.plugin.history_message_limit
+            if isinstance(config, DefaultChatterConfig)
+            else 0
+        )
         return DefaultChatterPromptBuilder.build_enhanced_history_text(
             chat_stream,
             self.format_message_line,
+            limit=limit,
         )
 
     async def _build_user_prompt(

@@ -335,6 +335,15 @@ class CoreConfig(ConfigBase):
             choices=["load_balanced", "round_robin"],
             hint="load_balanced: 负载均衡, round_robin: 轮询",
         )
+        context_compression_model: str = Field(
+            default="",
+            description="上下文压缩使用的模型 name（config/model.toml）；留空则沿用当前请求的模型",
+            label="压缩模型",
+            tag="ai",
+            input_type="text",
+            placeholder="deepseek-flash",
+            hint="压缩是纯摘要任务，建议用便宜、缓存好的非思考模型",
+        )
 
     llm: LLMSection = Field(default_factory=LLMSection)
 

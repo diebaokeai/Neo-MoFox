@@ -10,6 +10,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import io
+import re
 
 from src.core.utils.base64_helper import base64_decode_to_bytes
 from src.kernel.logger import get_logger
@@ -153,3 +154,30 @@ def compute_media_hash(data: str) -> str:
         十六进制哈希字符串
     """
     return compute_hash(data)
+
+
+_REASONING_BLOCK_RE = re.compile(
+    r"<(think|analysis|reasoning)\b[^>]*>.*?</\1>", re.DOTALL | re.IGNORECASE
+)
+_REASONING_TAG_RE = re.compile(r"</?(think|analysis|reasoning)\b[^>]*>", re.IGNORECASE)
+
+
+def strip_model_reasoning(text: object) -> str:
+    """剥离模型输出里混入的思考/分析段，避免污染媒体描述与日志。
+
+    思考型模型（MiniMax 等）偶尔会把 ``<think>...</think>`` 留在正文里；
+    这里删除成对标签及其内容，并清掉残留标签与多余空白。
+    """
+
+    source = str(text or "")
+    if not source:
+        return ""
+    cleaned = _REASONING_BLOCK_RE.sub(" ", source)
+    # 未闭合的思考段（输出被截断）直接丢到结尾
+    unclosed = re.search(
+        r"<(think|analysis|reasoning)\b[^>]*>", cleaned, re.IGNORECASE
+    )
+    if unclosed:
+        cleaned = cleaned[: unclosed.start()]
+    cleaned = _REASONING_TAG_RE.sub(" ", cleaned)
+    return " ".join(cleaned.split()).strip()

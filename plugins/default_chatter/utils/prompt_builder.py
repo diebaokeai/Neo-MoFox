@@ -170,10 +170,14 @@ class DefaultChatterPromptBuilder:
     def build_enhanced_history_text(
         chat_stream: ChatStream,
         formatter: Callable[[Message], str],
+        limit: int = 0,
     ) -> str:
-        """构建历史消息文本。"""
+        """构建历史消息文本；limit > 0 时只取最近 N 条。"""
+        messages = chat_stream.context.history_messages
+        if limit and limit > 0:
+            messages = messages[-limit:]
         history_lines: list[str] = []
-        for msg in chat_stream.context.history_messages:
+        for msg in messages:
             history_lines.append(formatter(msg))
 
         return "\n".join(history_lines)

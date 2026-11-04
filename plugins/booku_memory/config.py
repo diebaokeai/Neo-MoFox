@@ -39,6 +39,15 @@ class BookuMemoryConfig(BaseConfig):
             tag="ai",
             hint="达到阈值后仅对对应 stream 注入一次告警，直到再次调用记忆工具才重置"
         )
+        group_memory_tool_miss_warning_threshold: int = Field(
+            default=30,
+            description="群聊中 actor 连续多少轮未调用 memory_command 后注入告警；调大可降低群聊写入频率",
+            label="群聊记忆告警阈值",
+            ge=1,
+            le=200,
+            tag="ai",
+            hint="私聊/non-group 仍使用上面的阈值；群聊建议 30~60，避免逐轮记录聊天过程"
+        )
 
     @config_section("storage", title="存储配置", tag="database")
     class StorageSection(SectionBase):

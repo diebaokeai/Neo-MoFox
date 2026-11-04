@@ -25,6 +25,9 @@ if TYPE_CHECKING:
 _FLASHBACK_TARGET_PROMPT = "default_chatter_user_prompt"
 _MEMORY_TOOL_NAME = "memory_command"
 _MEMORY_TOOL_WARNING = f"- *警告：检测到你连续多次没有使用记忆工具({_MEMORY_TOOL_NAME})，请保持对记忆的高频使用,无论是查询、新建还是整理记忆！*"
+_GROUP_MEMORY_TOOL_WARNING = (
+    "- *群聊记忆提示：只记录稳定事实、约定和偏好；同一话题合并成一条，不要逐轮记录聊天过程；需要时先 search。*"
+)
 
 _SUPPORTED_SUFFIXES = {".txt", ".md", ".markdown", ".json", ".csv", ".log", ".docx"}
 
@@ -41,16 +44,26 @@ def _get_usage_warning_state(plugin: Any) -> dict[str, dict[str, Any]]:
     return state
 
 
-def _get_warning_threshold(plugin: Any) -> int:
-    """读取记忆工具缺失告警阈值。"""
+def _get_warning_threshold(plugin: Any, chat_type: str = "") -> int:
+    """读取记忆工具缺失告警阈值；群聊使用单独阈值。"""
 
     config = getattr(plugin, "config", None)
+    normalized_chat_type = str(chat_type or "").strip().lower()
+    is_group = normalized_chat_type in {"group", "chattype.group", "chat_type.group"}
     if isinstance(config, BookuMemoryConfig):
+        if is_group:
+            return max(1, int(config.plugin.group_memory_tool_miss_warning_threshold))
         return max(1, int(config.plugin.memory_tool_miss_warning_threshold))
-    return 6
+    return 30 if is_group else 6
 
 
-def _mark_memory_tool_usage(plugin: Any, *, stream_id: str, used_memory_tool: bool) -> None:
+def _mark_memory_tool_usage(
+    plugin: Any,
+    *,
+    stream_id: str,
+    used_memory_tool: bool,
+    chat_type: str = "",
+) -> None:
     """按聊天流更新连续未使用记忆工具计数。"""
 
     normalized_stream_id = str(stream_id or "").strip()
@@ -60,8 +73,11 @@ def _mark_memory_tool_usage(plugin: Any, *, stream_id: str, used_memory_tool: bo
     state = _get_usage_warning_state(plugin)
     stream_state = state.setdefault(
         normalized_stream_id,
-        {"miss_count": 0, "warning_pending": False},
+        {"miss_count": 0, "warning_pending": False, "chat_type": ""},
     )
+    normalized_chat_type = str(chat_type or "").strip().lower()
+    if normalized_chat_type:
+        stream_state["chat_type"] = normalized_chat_type
 
     if used_memory_tool:
         stream_state["miss_count"] = 0
@@ -70,7 +86,7 @@ def _mark_memory_tool_usage(plugin: Any, *, stream_id: str, used_memory_tool: bo
 
     miss_count = int(stream_state.get("miss_count", 0)) + 1
     stream_state["miss_count"] = miss_count
-    if miss_count >= _get_warning_threshold(plugin):
+    if miss_count >= _get_warning_threshold(plugin, str(stream_state.get("chat_type") or "")):
         stream_state["warning_pending"] = True
 
 
@@ -89,6 +105,8 @@ def _pop_memory_tool_warning(plugin: Any, *, stream_id: str) -> str:
         return ""
 
     stream_state["warning_pending"] = False
+    if str(stream_state.get("chat_type") or "") in {"group", "chattype.group", "chat_type.group"}:
+        return _GROUP_MEMORY_TOOL_WARNING
     return _MEMORY_TOOL_WARNING
 
 
@@ -461,10 +479,21 @@ class MemoryToolUsageWarningHandler(BaseEventHandler):
                 for item in params.get("used_tools", []) or []
                 if str(item).strip()
             }
+            chat_type = ""
+            try:
+                from src.app.plugin_system.api import stream_api
+
+                stream = await stream_api.get_stream(stream_id)
+                if stream is not None:
+                    raw_chat_type = getattr(stream, "chat_type", "")
+                    chat_type = str(getattr(raw_chat_type, "value", raw_chat_type) or "")
+            except Exception:
+                chat_type = ""
             _mark_memory_tool_usage(
                 self.plugin,
                 stream_id=stream_id,
                 used_memory_tool=_MEMORY_TOOL_NAME in used_tools,
+                chat_type=chat_type,
             )
             return EventDecision.SUCCESS, params
 

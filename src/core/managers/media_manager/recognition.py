@@ -15,7 +15,7 @@ from src.core.managers.media_manager.cache import MediaCache
 from src.core.managers.media_manager.engines import ASREngine, VLMEngine
 from src.core.managers.media_manager.file_store import MediaFileStore
 from src.core.managers.media_manager.repository import MediaRepository
-from src.core.managers.media_manager.utils import compute_hash
+from src.core.managers.media_manager.utils import compute_hash, strip_model_reasoning
 from src.kernel.event import get_event_bus
 from src.kernel.logger import get_logger
 
@@ -132,7 +132,8 @@ class MediaRecognition:
                     )
                 if cached:
                     logger.debug(f"从缓存获取{media_type}描述: {media_hash[:8]}...")
-                    return cached
+                    # 旧缓存可能残留 <think> 思考段，读取时一并清理
+                    return strip_model_reasoning(cached)
 
             pending_path = await self._file_store.save_to_pending(
                 base64_data,

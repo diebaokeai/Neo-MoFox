@@ -17,6 +17,16 @@ class DefaultChatterConfig(BaseConfig):
     class PluginSection(SectionBase):
         """插件基础配置。"""
 
+        history_message_limit: int = Field(
+            default=60,
+            description="每轮注入的历史消息条数上限（只取最近 N 条）；0 表示不限制，调小可显著减少 prompt token",
+            label="历史消息上限",
+            ge=0,
+            le=500,
+            tag="ai",
+            hint="群聊历史很长时建议 40~80，能明显降低 token 消耗与压缩频率",
+        )
+
         @config_section("theme_guide", title="场景引导", tag="text")
         class ThemeGuideSection(SectionBase):
             """不同聊天类型的人设/语气引导。"""

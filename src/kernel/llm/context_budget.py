@@ -28,7 +28,9 @@ AsyncContextCompressionHandler = Callable[
 
 logger = get_logger("kernel.llm.context", display="LLM 上下文")
 
-CONTEXT_COMPRESSION_TRIGGER_RATIO = 0.95
+# Reserve room for the dedicated compression prompt and its output. Triggering
+# at 95% left too little space for the compression request on small models.
+CONTEXT_COMPRESSION_TRIGGER_RATIO = 0.70
 
 
 def maybe_trim_payloads(

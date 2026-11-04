@@ -16,6 +16,7 @@ from src.core.managers.media_manager.utils import (
     extract_clean_base64,
     extract_gif_key_frames,
     extract_image_mime_type,
+    strip_model_reasoning,
 )
 from src.core.prompt import get_prompt_manager
 from src.core.utils.base64_helper import base64_decode_to_bytes
@@ -96,7 +97,7 @@ class VLMEngine:
             response = await request.send(stream=False)
             await response
 
-            description = response.message.strip() if response.message else ""
+            description = strip_model_reasoning(response.message)
 
             return description if description else None
 

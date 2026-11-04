@@ -3,6 +3,7 @@
 本模块提供 ToolUse 类，负责 Tool 组件的执行、历史记录管理和结果缓存。
 """
 
+import inspect
 import time
 import json
 from typing import Any, TYPE_CHECKING
@@ -18,6 +19,84 @@ if TYPE_CHECKING:
     from src.core.models.message import Message
 
 logger = get_logger("tool_use")
+
+
+class ToolArgumentError(RuntimeError):
+    """工具调用缺少必填参数。
+
+    Attributes:
+        tool_name: 触发错误的工具名称。
+        missing: 缺失的参数名列表。
+    """
+
+    def __init__(self, tool_name: str, missing: list[str]) -> None:
+        """初始化异常，并生成面向模型的补参提示。
+
+        Args:
+            tool_name: 工具名称。
+            missing: 缺失的必填参数名列表。
+        """
+        self.tool_name = tool_name
+        self.missing = missing
+        names = "、".join(missing)
+        super().__init__(
+            f"调用工具 {tool_name} 缺少必要参数【{names}】。请补全参数后重新调用。"
+        )
+
+
+def _required_argument_names(tool_instance: Any) -> list[str]:
+    """读取工具声明中必填的参数名。
+
+    优先使用 ``to_schema()`` 的 ``required`` 列表（与模型看到的定义一致），
+    读取失败时回退到 ``execute`` 签名中无默认值的参数。
+
+    Args:
+        tool_instance: 工具实例。
+
+    Returns:
+        list[str]: 必填参数名列表；无法判断时返回空列表。
+    """
+    schema_getter = getattr(tool_instance, "to_schema", None)
+    if callable(schema_getter):
+        try:
+            schema = schema_getter()
+            parameters = schema.get("function", {}).get("parameters", {})
+            required = parameters.get("required", [])
+            if required:
+                return [str(name) for name in required]
+        except Exception:
+            # schema 读取失败时回退到签名检查，不影响正常执行
+            pass
+
+    try:
+        signature = inspect.signature(tool_instance.execute)
+    except (TypeError, ValueError):
+        return []
+
+    required_names: list[str] = []
+    for name, parameter in signature.parameters.items():
+        if name == "self":
+            continue
+        if parameter.kind in (
+            inspect.Parameter.VAR_POSITIONAL,
+            inspect.Parameter.VAR_KEYWORD,
+        ):
+            continue
+        if parameter.default is inspect.Parameter.empty:
+            required_names.append(name)
+    return required_names
+
+
+def _missing_required_arguments(
+    tool_instance: Any,
+    kwargs: dict[str, Any],
+) -> list[str]:
+    """返回 ``kwargs`` 中缺失的必填参数名。"""
+    return [
+        name
+        for name in _required_argument_names(tool_instance)
+        if name not in kwargs
+    ]
 
 
 async def _record_tool_telemetry_event(
@@ -213,6 +292,12 @@ class ToolUse:
                 # 事件触发失败不中断工具执行，静默降级
                 pass
 
+            # 调用前校验必填参数：模型偶发返回空参数（如 {}），
+            # 直接调用会抛难以自愈的 TypeError，这里转成明确的补参提示。
+            missing_arguments = _missing_required_arguments(tool_instance, kwargs)
+            if missing_arguments:
+                raise ToolArgumentError(tool_instance.name, missing_arguments)
+
             # 调用 Tool 的 execute 方法
             from src.kernel.llm.usable_execution import execute_usable_instance
 
@@ -350,6 +435,9 @@ class ToolUse:
                 # 事件触发失败不中断异常传播，静默降级
                 pass
 
+            if isinstance(e, ToolArgumentError):
+                logger.warning(f"工具参数缺失 ({tool_instance.name}): {e}")
+                raise
             logger.error(f"工具执行失败 ({tool_instance.name}): {e}")
             raise RuntimeError(f"Tool 执行失败: {e}") from e
 
