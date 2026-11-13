@@ -27,6 +27,13 @@ class DefaultChatterConfig(BaseConfig):
             hint="群聊历史很长时建议 40~80，能明显降低 token 消耗与压缩频率",
         )
 
+        allowed_tools: list[str] = Field(
+            default_factory=list,
+            description="允许注入给默认 chatter 的工具/动作名白名单；留空=不限制。用于收窄工具 schema、降低 token",
+            label="工具白名单",
+            tag="ai",
+        )
+
         @config_section("theme_guide", title="场景引导", tag="text")
         class ThemeGuideSection(SectionBase):
             """不同聊天类型的人设/语气引导。"""

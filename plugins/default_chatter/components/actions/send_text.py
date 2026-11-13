@@ -22,6 +22,11 @@ from src.app.plugin_system.types import Message, MessageType
 from ..config import DefaultChatterConfig
 from ...utils.probability_gate import set_next_tick_sub_agent_bonus
 
+try:  # 可选依赖：装了 cyrene_neochatter 才做昔涟风格清理
+    from plugins.cyrene_neochatter.style_guard import polish as _polish
+except Exception:  # noqa: BLE001
+    _polish = None
+
 logger = get_logger("default_chatter")
 
 _ANGLE_AT_RE = re.compile(r"@<[^<>]+?:\s*\d+\s*>")
@@ -114,6 +119,10 @@ class SendTextAction(BaseAction):
                 content,
                 flags=re.IGNORECASE,
             )[0].strip()
+        if content and _polish is not None:
+            polished = _polish(content)
+            if polished:
+                content = polished
 
         # 将正文开头的 @（支持 @名字 与 @<名字:QQ>）转换为 at 参数，正文不残留 QQ 号。
         at_prefix_hint: str | None = None

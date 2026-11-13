@@ -82,6 +82,25 @@ class DefaultChatter(BaseChatter):
         super().__init__(stream_id, plugin)
         self._interest_gate = InterestGate(plugin, self)
 
+    async def modify_llm_usables(self, llm_usables: list[Any]) -> list[Any]:
+        """按配置的白名单裁剪注入的工具，收窄 schema 与 token。"""
+
+        usables = await super().modify_llm_usables(llm_usables)
+        plugin_config = self.plugin.config
+        section = getattr(plugin_config, "plugin", None)
+        allow = {
+            str(item).strip()
+            for item in (getattr(section, "allowed_tools", None) or [])
+        }
+        allow.discard("")
+        if not allow:
+            return usables
+        return [
+            usable
+            for usable in usables
+            if str(getattr(usable, "name", "") or "") in allow
+        ]
+
     def _build_session_options(self) -> DefaultChatterSessionOptions:
         """构建默认会话配置。"""
         return DefaultChatterService._build_default_options(self.plugin)
